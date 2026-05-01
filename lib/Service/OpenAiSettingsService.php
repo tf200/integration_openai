@@ -47,7 +47,8 @@ class OpenAiSettingsService {
 		'chat_endpoint_enabled' => 'boolean',
 		'basic_user' => 'string',
 		'basic_password' => 'string',
-		'use_basic_auth' => 'boolean'
+		'use_basic_auth' => 'boolean',
+		'ffmpeg_binary' => 'string',
 	];
 
 	private const USER_CONFIG_TYPES = [

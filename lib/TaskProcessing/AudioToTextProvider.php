@@ -11,6 +11,7 @@ namespace OCA\OpenAi\TaskProcessing;
 
 use Exception;
 use OCA\OpenAi\AppInfo\Application;
+use OCA\OpenAi\Service\AudioTranscriptionPreparationService;
 use OCA\OpenAi\Service\OpenAiAPIService;
 use OCP\Files\File;
 use OCP\IAppConfig;
@@ -27,6 +28,7 @@ class AudioToTextProvider implements ISynchronousProvider {
 
 	public function __construct(
 		private OpenAiAPIService $openAiAPIService,
+		private AudioTranscriptionPreparationService $audioTranscriptionPreparationService,
 		private LoggerInterface $logger,
 		private IAppConfig $appConfig,
 		private IL10N $l,
@@ -101,13 +103,29 @@ class AudioToTextProvider implements ISynchronousProvider {
 		}
 
 		$model = $this->appConfig->getValueString(Application::APP_ID, 'default_stt_model_id', Application::DEFAULT_MODEL_ID, lazy: true) ?: Application::DEFAULT_MODEL_ID;
+		$preparedFiles = [];
 
 		try {
-			$transcription = $this->openAiAPIService->transcribeFile($userId, $inputFile, false, $model, $language);
-			return ['output' => $transcription];
+			$preparedFiles = $this->audioTranscriptionPreparationService->prepare($inputFile);
+			$transcriptions = [];
+
+			foreach ($preparedFiles as $preparedFile) {
+				$transcriptions[] = $this->openAiAPIService->transcribeLocalFile(
+					$userId,
+					$preparedFile['path'],
+					$preparedFile['filename'],
+					false,
+					$model,
+					$language,
+				);
+			}
+
+			return ['output' => implode("\n\n", $transcriptions)];
 		} catch (Exception $e) {
 			$this->logger->warning('OpenAI\'s Whisper transcription failed with: ' . $e->getMessage(), ['exception' => $e]);
 			throw new RuntimeException('OpenAI\'s Whisper transcription failed with: ' . $e->getMessage());
+		} finally {
+			$this->audioTranscriptionPreparationService->cleanup($preparedFiles);
 		}
 	}
 }

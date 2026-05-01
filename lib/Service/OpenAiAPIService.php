@@ -730,7 +730,7 @@ class OpenAiAPIService {
 		string $language = 'default',
 	): string {
 		try {
-			$transcriptionResponse = $this->transcribe($userId, $file->getContent(), $translate, $model, $language);
+			$transcriptionResponse = $this->transcribe($userId, $file->getContent(), $translate, $model, $language, $file->getName() ?: 'audio.webm');
 		} catch (NotPermittedException|LockedException|GenericFileException $e) {
 			$this->logger->warning('Could not read audio file: ' . $file->getPath() . '. Error: ' . $e->getMessage(), ['app' => Application::APP_ID]);
 			throw new Exception($this->l10n->t('Could not read audio file.'), Http::STATUS_INTERNAL_SERVER_ERROR);
@@ -754,6 +754,52 @@ class OpenAiAPIService {
 		bool $translate = true,
 		string $model = Application::DEFAULT_MODEL_ID,
 		string $language = 'default',
+		string $filename = 'audio.mp3',
+	): string {
+		return $this->transcribeUpload($userId, $audioFileContent, $filename, $translate, $model, $language);
+	}
+
+	/**
+	 * @param string|null $userId
+	 * @param string $path
+	 * @param string $filename
+	 * @param bool $translate
+	 * @param string $model
+	 * @param string $language
+	 * @return string
+	 * @throws Exception
+	 */
+	public function transcribeLocalFile(
+		?string $userId,
+		string $path,
+		string $filename,
+		bool $translate = false,
+		string $model = Application::DEFAULT_MODEL_ID,
+		string $language = 'default',
+	): string {
+		$resource = fopen($path, 'rb');
+		if ($resource === false) {
+			throw new Exception($this->l10n->t('Could not read audio file.'), Http::STATUS_INTERNAL_SERVER_ERROR);
+		}
+
+		try {
+			return $this->transcribeUpload($userId, $resource, $filename, $translate, $model, $language);
+		} finally {
+			fclose($resource);
+		}
+	}
+
+	/**
+	 * @param resource|string $audioFileContent
+	 * @throws Exception
+	 */
+	private function transcribeUpload(
+		?string $userId,
+		mixed $audioFileContent,
+		string $filename,
+		bool $translate = true,
+		string $model = Application::DEFAULT_MODEL_ID,
+		string $language = 'default',
 	): string {
 		if ($this->isQuotaExceeded($userId, Application::QUOTA_TYPE_TRANSCRIPTION)) {
 			throw new Exception($this->l10n->t('Audio transcription quota exceeded'), Http::STATUS_TOO_MANY_REQUESTS);
@@ -765,7 +811,10 @@ class OpenAiAPIService {
 
 		$params = [
 			'model' => $model === Application::DEFAULT_MODEL_ID ? Application::DEFAULT_TRANSCRIPTION_MODEL_ID : $model,
-			'file' => $audioFileContent,
+			'file' => [
+				'contents' => $audioFileContent,
+				'filename' => $filename,
+			],
 			'response_format' => 'verbose_json',
 			// Verbose needed for extraction of audio duration
 		];
@@ -1024,10 +1073,17 @@ class OpenAiAPIService {
 						foreach ($params as $key => $value) {
 							$part = [
 								'name' => $key,
-								'contents' => $value,
 							];
-							if ($key === 'file') {
-								$part['filename'] = 'file.mp3';
+							if (is_array($value) && array_key_exists('contents', $value)) {
+								$part['contents'] = $value['contents'];
+								if (isset($value['filename']) && is_string($value['filename'])) {
+									$part['filename'] = $value['filename'];
+								}
+							} else {
+								$part['contents'] = $value;
+								if ($key === 'file') {
+									$part['filename'] = 'audio.mp3';
+								}
 							}
 							$multipart[] = $part;
 						}
