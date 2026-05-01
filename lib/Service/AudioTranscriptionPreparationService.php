@@ -157,7 +157,13 @@ class AudioTranscriptionPreparationService {
    throw new RuntimeException($this->l10n->t('Could not start ffmpeg for audio transcription.'));
   }
 
-  fclose($pipes[0]);
+  if (isset($pipes[0]) && is_resource($pipes[0])) {
+   fclose($pipes[0]);
+  }
+  if (!isset($pipes[1], $pipes[2]) || !is_resource($pipes[1]) || !is_resource($pipes[2])) {
+   proc_close($process);
+   throw new RuntimeException($this->l10n->t('Could not start ffmpeg for audio transcription.'));
+  }
   stream_set_blocking($pipes[1], false);
   stream_set_blocking($pipes[2], false);
   $startedAt = time();
@@ -166,9 +172,12 @@ class AudioTranscriptionPreparationService {
   $exitCode = 1;
   do {
    $status = proc_get_status($process);
-   $stderr .= stream_get_contents($pipes[2]);
+   $stderr .= $this->readPipe($pipes[2] ?? null);
    if ((time() - $startedAt) > self::FFMPEG_TIMEOUT_SECONDS) {
     proc_terminate($process);
+    $this->closePipe($pipes[1] ?? null);
+    $this->closePipe($pipes[2] ?? null);
+    proc_close($process);
     throw new RuntimeException($this->l10n->t('Audio preprocessing timed out.'));
    }
    if (!$status['running']) {
@@ -178,9 +187,9 @@ class AudioTranscriptionPreparationService {
    usleep(100000);
   } while (true);
 
-  $stderr .= stream_get_contents($pipes[2]);
-  fclose($pipes[1]);
-  fclose($pipes[2]);
+  $stderr .= $this->readPipe($pipes[2] ?? null);
+  $this->closePipe($pipes[1] ?? null);
+  $this->closePipe($pipes[2] ?? null);
   proc_close($process);
 
   if ($exitCode !== 0) {
@@ -199,7 +208,7 @@ class AudioTranscriptionPreparationService {
    throw new RuntimeException($this->l10n->t('Recording is too large for transcription and ffmpeg is not available.'));
   }
   foreach ($pipes as $pipe) {
-   fclose($pipe);
+   $this->closePipe($pipe);
   }
   if (proc_close($process) !== 0) {
    throw new RuntimeException($this->l10n->t('Recording is too large for transcription and ffmpeg is not available.'));
@@ -212,6 +221,20 @@ class AudioTranscriptionPreparationService {
    throw new RuntimeException($this->l10n->t('Could not create temporary folder for audio transcription.'));
   }
   return $workDir;
+ }
+
+ private function closePipe(mixed $pipe): void {
+  if (is_resource($pipe)) {
+   fclose($pipe);
+  }
+ }
+
+ private function readPipe(mixed $pipe): string {
+  if (!is_resource($pipe)) {
+   return '';
+  }
+  $content = stream_get_contents($pipe);
+  return is_string($content) ? $content : '';
  }
 
  private function removeDirectory(string $directory): void {
