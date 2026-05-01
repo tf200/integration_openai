@@ -785,7 +785,9 @@ class OpenAiAPIService {
 		try {
 			return $this->transcribeUpload($userId, $resource, $filename, $translate, $model, $language);
 		} finally {
-			fclose($resource);
+			if (is_resource($resource)) {
+				@fclose($resource);
+			}
 		}
 	}
 
