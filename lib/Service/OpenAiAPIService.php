@@ -792,6 +792,36 @@ class OpenAiAPIService {
 	}
 
 	/**
+	 * @return array{text: string, segments?: list<array<string, mixed>>}
+	 * @throws Exception
+	 */
+	public function transcribeLocalFileWithSegments(
+		?string $userId,
+		string $path,
+		string $filename,
+		bool $translate = false,
+		string $model = Application::DEFAULT_MODEL_ID,
+		string $language = 'default',
+	): array {
+		$resource = fopen($path, 'rb');
+		if ($resource === false) {
+			throw new Exception($this->l10n->t('Could not read audio file.'), Http::STATUS_INTERNAL_SERVER_ERROR);
+		}
+
+		try {
+			$response = $this->transcribeUploadResponse($userId, $resource, $filename, $translate, $model, $language);
+			return [
+				'text' => $response['text'],
+				'segments' => $response['segments'] ?? [],
+			];
+		} finally {
+			if (is_resource($resource)) {
+				@fclose($resource);
+			}
+		}
+	}
+
+	/**
 	 * @param resource|string $audioFileContent
 	 * @throws Exception
 	 */
@@ -803,6 +833,23 @@ class OpenAiAPIService {
 		string $model = Application::DEFAULT_MODEL_ID,
 		string $language = 'default',
 	): string {
+		$response = $this->transcribeUploadResponse($userId, $audioFileContent, $filename, $translate, $model, $language);
+		return $response['text'];
+	}
+
+	/**
+	 * @param resource|string $audioFileContent
+	 * @return array<string, mixed>&array{text: string}
+	 * @throws Exception
+	 */
+	private function transcribeUploadResponse(
+		?string $userId,
+		mixed $audioFileContent,
+		string $filename,
+		bool $translate = true,
+		string $model = Application::DEFAULT_MODEL_ID,
+		string $language = 'default',
+	): array {
 		if ($this->isQuotaExceeded($userId, Application::QUOTA_TYPE_TRANSCRIPTION)) {
 			throw new Exception($this->l10n->t('Audio transcription quota exceeded'), Http::STATUS_TOO_MANY_REQUESTS);
 		}
@@ -847,7 +894,7 @@ class OpenAiAPIService {
 				$this->logger->warning('Could not create quota usage for user: ' . $userId . ' and quota type: ' . Application::QUOTA_TYPE_TRANSCRIPTION . '. Error: ' . $e->getMessage(), ['app' => Application::APP_ID]);
 			}
 		}
-		return $response['text'];
+		return $response;
 	}
 
 	/**

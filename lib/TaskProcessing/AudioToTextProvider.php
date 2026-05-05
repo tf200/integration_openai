@@ -60,11 +60,18 @@ class AudioToTextProvider implements ISynchronousProvider {
 	}
 
 	public function getOptionalInputShape(): array {
-		return ['language' => new ShapeDescriptor(
+		return [
+			'language' => new ShapeDescriptor(
 			$this->l->t('Language'),
 			$this->l->t('The language of the audio file'),
 			EShapeType::Enum
-		)];
+			),
+			'output_format' => new ShapeDescriptor(
+				$this->l->t('Output format'),
+				$this->l->t('The format of the transcription output'),
+				EShapeType::Enum
+			),
+		];
 	}
 
 	public function getOptionalInputShapeEnumValues(): array {
@@ -73,11 +80,17 @@ class AudioToTextProvider implements ISynchronousProvider {
 		}, Application::AUDIO_TO_TEXT_LANGUAGES);
 		$detectLanguageEnumValue = new ShapeEnumValue($this->l->t('Detect language'), 'detect_language');
 		$defaultLanguageEnumValue = new ShapeEnumValue($this->l->t('Default'), 'default');
-		return ['language' => array_merge([$detectLanguageEnumValue, $defaultLanguageEnumValue], $languageEnumValues)];
+		return [
+			'language' => array_merge([$detectLanguageEnumValue, $defaultLanguageEnumValue], $languageEnumValues),
+			'output_format' => [
+				new ShapeEnumValue($this->l->t('Plain text'), 'text'),
+				new ShapeEnumValue($this->l->t('Timestamped segments'), 'segments_json'),
+			],
+		];
 	}
 
 	public function getOptionalInputShapeDefaults(): array {
-		return ['language' => 'default'];
+		return ['language' => 'default', 'output_format' => 'text'];
 	}
 
 	public function getOutputShapeEnumValues(): array {
@@ -101,6 +114,10 @@ class AudioToTextProvider implements ISynchronousProvider {
 		if (!is_string($language)) {
 			throw new RuntimeException('Invalid language');
 		}
+		$outputFormat = $input['output_format'] ?? 'text';
+		if (!is_string($outputFormat) || !in_array($outputFormat, ['text', 'segments_json'], true)) {
+			throw new RuntimeException('Invalid output format');
+		}
 
 		$model = $this->appConfig->getValueString(Application::APP_ID, 'default_stt_model_id', Application::DEFAULT_MODEL_ID, lazy: true) ?: Application::DEFAULT_MODEL_ID;
 		$preparedFiles = [];
@@ -110,14 +127,29 @@ class AudioToTextProvider implements ISynchronousProvider {
 			$transcriptions = [];
 
 			foreach ($preparedFiles as $preparedFile) {
-				$transcriptions[] = $this->openAiAPIService->transcribeLocalFile(
-					$userId,
-					$preparedFile['path'],
-					$preparedFile['filename'],
-					false,
-					$model,
-					$language,
-				);
+				if ($outputFormat === 'segments_json') {
+					$transcriptions[] = $this->openAiAPIService->transcribeLocalFileWithSegments(
+						$userId,
+						$preparedFile['path'],
+						$preparedFile['filename'],
+						false,
+						$model,
+						$language,
+					);
+				} else {
+					$transcriptions[] = $this->openAiAPIService->transcribeLocalFile(
+						$userId,
+						$preparedFile['path'],
+						$preparedFile['filename'],
+						false,
+						$model,
+						$language,
+					);
+				}
+			}
+
+			if ($outputFormat === 'segments_json') {
+				return ['output' => json_encode($this->mergeSegmentedTranscriptions($transcriptions), JSON_THROW_ON_ERROR)];
 			}
 
 			return ['output' => implode("\n\n", $transcriptions)];
@@ -127,5 +159,38 @@ class AudioToTextProvider implements ISynchronousProvider {
 		} finally {
 			$this->audioTranscriptionPreparationService->cleanup($preparedFiles);
 		}
+	}
+
+	/**
+	 * @param list<array{text: string, segments?: list<array<string, mixed>>}> $transcriptions
+	 * @return array{text: string, segments: list<array<string, mixed>>}
+	 */
+	private function mergeSegmentedTranscriptions(array $transcriptions): array {
+		$text = [];
+		$segments = [];
+		$offset = 0.0;
+
+		foreach ($transcriptions as $transcription) {
+			$text[] = $transcription['text'];
+			$lastEnd = 0.0;
+
+			foreach ($transcription['segments'] ?? [] as $segment) {
+				if (isset($segment['start']) && is_numeric($segment['start'])) {
+					$segment['start'] = (float)$segment['start'] + $offset;
+				}
+				if (isset($segment['end']) && is_numeric($segment['end'])) {
+					$segment['end'] = (float)$segment['end'] + $offset;
+					$lastEnd = max($lastEnd, (float)$segment['end']);
+				}
+				$segments[] = $segment;
+			}
+
+			$offset = $lastEnd;
+		}
+
+		return [
+			'text' => implode("\n\n", $text),
+			'segments' => $segments,
+		];
 	}
 }
