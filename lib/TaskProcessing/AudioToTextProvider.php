@@ -85,6 +85,7 @@ class AudioToTextProvider implements ISynchronousProvider {
 			'output_format' => [
 				new ShapeEnumValue($this->l->t('Plain text'), 'text'),
 				new ShapeEnumValue($this->l->t('Timestamped segments'), 'segments_json'),
+				new ShapeEnumValue($this->l->t('Diarized segments'), 'diarized_json'),
 			],
 		];
 	}
@@ -115,11 +116,14 @@ class AudioToTextProvider implements ISynchronousProvider {
 			throw new RuntimeException('Invalid language');
 		}
 		$outputFormat = $input['output_format'] ?? 'text';
-		if (!is_string($outputFormat) || !in_array($outputFormat, ['text', 'segments_json'], true)) {
+		if (!is_string($outputFormat) || !in_array($outputFormat, ['text', 'segments_json', 'diarized_json'], true)) {
 			throw new RuntimeException('Invalid output format');
 		}
 
 		$model = $this->appConfig->getValueString(Application::APP_ID, 'default_stt_model_id', Application::DEFAULT_MODEL_ID, lazy: true) ?: Application::DEFAULT_MODEL_ID;
+		if ($outputFormat === 'diarized_json') {
+			$model = Application::DIARIZED_TRANSCRIPTION_MODEL_ID;
+		}
 		$preparedFiles = [];
 
 		try {
@@ -127,7 +131,15 @@ class AudioToTextProvider implements ISynchronousProvider {
 			$transcriptions = [];
 
 			foreach ($preparedFiles as $preparedFile) {
-				if ($outputFormat === 'segments_json') {
+				if ($outputFormat === 'diarized_json') {
+					$transcriptions[] = $this->openAiAPIService->transcribeLocalFileDiarized(
+						$userId,
+						$preparedFile['path'],
+						$preparedFile['filename'],
+						$model,
+						$language,
+					);
+				} elseif ($outputFormat === 'segments_json') {
 					$transcriptions[] = $this->openAiAPIService->transcribeLocalFileWithSegments(
 						$userId,
 						$preparedFile['path'],
@@ -148,8 +160,14 @@ class AudioToTextProvider implements ISynchronousProvider {
 				}
 			}
 
-			if ($outputFormat === 'segments_json') {
-				return ['output' => json_encode($this->mergeSegmentedTranscriptions($transcriptions), JSON_THROW_ON_ERROR)];
+			if ($outputFormat === 'segments_json' || $outputFormat === 'diarized_json') {
+				$mergedTranscription = $this->mergeSegmentedTranscriptions($transcriptions);
+				$mergedTranscription['diarized'] = $outputFormat === 'diarized_json';
+				$mergedTranscription['model'] = $model;
+				if ($outputFormat === 'diarized_json' && count($preparedFiles) > 1) {
+					$mergedTranscription['speakerLabelsMayResetAcrossChunks'] = true;
+				}
+				return ['output' => json_encode($mergedTranscription, JSON_THROW_ON_ERROR)];
 			}
 
 			return ['output' => implode("\n\n", $transcriptions)];

@@ -43,6 +43,7 @@ class Application extends App implements IBootstrap {
 	public const DEFAULT_COMPLETION_MODEL_ID = 'gpt-4.1-mini';
 	public const DEFAULT_IMAGE_MODEL_ID = 'dall-e-2';
 	public const DEFAULT_TRANSCRIPTION_MODEL_ID = 'whisper-1';
+	public const DIARIZED_TRANSCRIPTION_MODEL_ID = 'gpt-4o-transcribe-diarize';
 	public const DEFAULT_SPEECH_MODEL_ID = 'tts-1-hd';
 	public const DEFAULT_SPEECH_VOICE = 'alloy';
 	public const DEFAULT_SPEECH_VOICES = [

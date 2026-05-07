@@ -822,6 +822,35 @@ class OpenAiAPIService {
 	}
 
 	/**
+	 * @return array{text: string, segments?: list<array<string, mixed>>}
+	 * @throws Exception
+	 */
+	public function transcribeLocalFileDiarized(
+		?string $userId,
+		string $path,
+		string $filename,
+		string $model = Application::DIARIZED_TRANSCRIPTION_MODEL_ID,
+		string $language = 'default',
+	): array {
+		$resource = fopen($path, 'rb');
+		if ($resource === false) {
+			throw new Exception($this->l10n->t('Could not read audio file.'), Http::STATUS_INTERNAL_SERVER_ERROR);
+		}
+
+		try {
+			$response = $this->transcribeUploadResponse($userId, $resource, $filename, false, $model, $language, 'diarized_json');
+			return [
+				'text' => $response['text'],
+				'segments' => $response['segments'] ?? [],
+			];
+		} finally {
+			if (is_resource($resource)) {
+				@fclose($resource);
+			}
+		}
+	}
+
+	/**
 	 * @param resource|string $audioFileContent
 	 * @throws Exception
 	 */
@@ -849,24 +878,27 @@ class OpenAiAPIService {
 		bool $translate = true,
 		string $model = Application::DEFAULT_MODEL_ID,
 		string $language = 'default',
+		string $responseFormat = 'verbose_json',
 	): array {
 		if ($this->isQuotaExceeded($userId, Application::QUOTA_TYPE_TRANSCRIPTION)) {
 			throw new Exception($this->l10n->t('Audio transcription quota exceeded'), Http::STATUS_TOO_MANY_REQUESTS);
 		}
-		// enforce whisper for OpenAI
-		if ($this->isUsingOpenAi()) {
+		$model = $model === Application::DEFAULT_MODEL_ID ? Application::DEFAULT_TRANSCRIPTION_MODEL_ID : $model;
+		if ($this->isUsingOpenAi() && $responseFormat === 'verbose_json') {
 			$model = Application::DEFAULT_TRANSCRIPTION_MODEL_ID;
 		}
 
 		$params = [
-			'model' => $model === Application::DEFAULT_MODEL_ID ? Application::DEFAULT_TRANSCRIPTION_MODEL_ID : $model,
+			'model' => $model,
 			'file' => [
 				'contents' => $audioFileContent,
 				'filename' => $filename,
 			],
-			'response_format' => 'verbose_json',
-			// Verbose needed for extraction of audio duration
+			'response_format' => $responseFormat,
 		];
+		if ($responseFormat === 'diarized_json') {
+			$params['chunking_strategy'] = 'auto';
+		}
 		// Gets the user's preferred language if it's not the default one
 		if ($language === 'default') {
 			$language = $this->openAiSettingsService->getUserSTTLanguage($userId);
@@ -885,8 +917,9 @@ class OpenAiAPIService {
 		}
 
 		// Extract audio duration from response and store it as quota usage:
-		if (isset($response['segments'])) {
-			$audioDuration = intval(round(floatval(array_pop($response['segments'])['end'])));
+		if (isset($response['segments']) && is_array($response['segments']) && $response['segments'] !== []) {
+			$lastSegment = $response['segments'][array_key_last($response['segments'])];
+			$audioDuration = intval(round(floatval($lastSegment['end'] ?? 0)));
 
 			try {
 				$this->createQuotaUsage($userId ?? '', Application::QUOTA_TYPE_TRANSCRIPTION, $audioDuration);
